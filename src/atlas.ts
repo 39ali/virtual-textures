@@ -1,17 +1,16 @@
 import * as THREE from "three";
 
-export const MAX_MIP = 7.0;
-export const VIRTUAL_SIZE = 16384;
 export const TILE_SIZE = 256;
 export const PADDING = 1.0;
 export const TILE_SIZE_PADDED = TILE_SIZE + 2 * PADDING;
-
-export const TILES_X = VIRTUAL_SIZE / TILE_SIZE;
 
 export const SLOT_COUNT = 2 ** 5;
 export const ATLAS_SIZE = TILE_SIZE_PADDED * SLOT_COUNT;
 
 export const FEEDBACK_RES = 256;
+
+console.warn("SLOT_COUNT", SLOT_COUNT);
+console.warn("ATLAS_SIZE", ATLAS_SIZE);
 
 enum TileState {
   loaded,
@@ -47,15 +46,27 @@ export class GpuAtlas {
   // atlas slot info
   atlas: Slot[];
   mark: Uint32Array<ArrayBuffer>[];
+  VIRTUAL_SIZE: number;
+  TILES_X: number;
+  MAX_MIP: number;
 
-  constructor(url: string, renderer: THREE.WebGLRenderer) {
+  constructor(
+    url: string,
+    renderer: THREE.WebGLRenderer,
+    VIRTUAL_SIZE: number,
+    MAX_MIP: number
+  ) {
+    this.VIRTUAL_SIZE = VIRTUAL_SIZE;
+    this.TILES_X = VIRTUAL_SIZE / TILE_SIZE;
+    this.MAX_MIP = MAX_MIP;
+
     this.url = url;
     // page table
     // RGBA float: R = atlasU, G = atlasV, B = loaded(1/0), A = not used
     this.pageTableTex = [];
     for (let i = 0; i < MAX_MIP; i++) {
-      let pageWidth = TILES_X / 2 ** i;
-      let pageHeight = TILES_X / 2 ** i;
+      let pageWidth = this.TILES_X / 2 ** i;
+      let pageHeight = this.TILES_X / 2 ** i;
       const pageTableData = new Float32Array(pageWidth * pageHeight * 4);
 
       for (let i = 0; i < pageWidth * pageHeight; i++) {
@@ -96,8 +107,7 @@ export class GpuAtlas {
 
     renderer.initTexture(atlasTex);
     this.atlasTex = atlasTex;
-    console.warn(" this.pageTableTex", this.pageTableTex);
-    console.warn("this.atlasTex", this.atlasTex);
+
 
     this.tiles = [];
     for (let i = 0; i < MAX_MIP; i++) this.tiles.push([]);
@@ -105,8 +115,8 @@ export class GpuAtlas {
     // -1=not loaded, 0>= where the tile lives)
     this.pagetables = [];
     for (let i = 0; i < MAX_MIP; i++) {
-      const tileX = TILES_X / 2 ** i;
-      const tileY = TILES_X / 2 ** i;
+      const tileX = this.TILES_X / 2 ** i;
+      const tileY = this.TILES_X / 2 ** i;
       const tiles = new Int32Array(tileX * tileY);
       tiles.fill(-1);
       this.pagetables[i] = tiles;
@@ -129,15 +139,15 @@ export class GpuAtlas {
     this.readBuf = new Uint8Array(FEEDBACK_RES * FEEDBACK_RES * 4);
     this.mark = [];
     for (let i = 0; i < MAX_MIP; i++) {
-      const tileX = TILES_X / 2 ** i;
-      const tileY = TILES_X / 2 ** i;
+      const tileX = this.TILES_X / 2 ** i;
+      const tileY = this.TILES_X / 2 ** i;
       this.mark.push(new Uint32Array(tileX * tileY));
     }
     this.renderer = renderer;
   }
 
   async loadFallbackMip() {
-    const mip = MAX_MIP - 1;
+    const mip = this.MAX_MIP - 1;
     const slot = 0;
     const tx = 0;
     const ty = 0;
@@ -196,7 +206,7 @@ export class GpuAtlas {
   update(frameID: number) {
     // collect unique tile IDs that are requested
 
-    for (let i = 0; i < MAX_MIP; i++) {
+    for (let i = 0; i < this.MAX_MIP; i++) {
       this.mark[i].fill(0);
     }
 
@@ -210,7 +220,7 @@ export class GpuAtlas {
       const mip = this.readBuf[i + 3];
 
       if (valid !== 0) {
-        const tileX = TILES_X / 2 ** mip;
+        const tileX = this.TILES_X / 2 ** mip;
         const id = ty * tileX + tx;
         if (!this.mark[mip][id]) {
           this.mark[mip][id] = 1;
@@ -242,7 +252,7 @@ export class GpuAtlas {
         const id = this.atlas[slot].tileid;
         const slotMip = this.atlas[slot].mip;
 
-        const tileX = TILES_X / 2 ** slotMip;
+        const tileX = this.TILES_X / 2 ** slotMip;
         const tx = id % tileX;
         const ty = (id / tileX) | 0;
         //@ts-ignore
@@ -273,8 +283,8 @@ export class GpuAtlas {
       this.atlas[slot].mip = mip;
       this.pagetables[mip][id] = slot;
 
-      const tileX = TILES_X / 2 ** mip;
-      const tileY = TILES_X / 2 ** mip;
+      const tileX = this.TILES_X / 2 ** mip;
+      const tileY = this.TILES_X / 2 ** mip;
 
       const tx = id % tileX;
       const ty = (id / tileY) | 0;
@@ -370,5 +380,11 @@ export class GpuAtlas {
       .then((r) => r.blob())
       .then(createImageBitmap);
     return img;
+  }
+
+  clear() {
+    this.pageTableTex.forEach((t) => t.dispose());
+    this.atlasTex.dispose();
+    this.fbRT.dispose();
   }
 }

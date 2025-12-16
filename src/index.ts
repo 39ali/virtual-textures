@@ -3,20 +3,13 @@ import {
   ATLAS_SIZE,
   FEEDBACK_RES,
   GpuAtlas,
-  MAX_MIP,
   PADDING,
-  SLOT_COUNT,
   TILE_SIZE,
-  TILES_X,
-  VIRTUAL_SIZE,
 } from "./atlas";
+import { CameraControl } from "./cameraControl";
+import { Fps } from "./fps";
 
 let frameID = 1;
-
-console.warn("TILES_X, TILES_Y", TILES_X, TILES_X);
-
-console.warn("SLOT_COUNT", SLOT_COUNT);
-console.warn("ATLAS_SIZE", ATLAS_SIZE);
 
 const WIDTH = window.innerWidth;
 const HEIGHT = window.innerWidth;
@@ -36,27 +29,18 @@ class App {
   debugCam: THREE.OrthographicCamera;
   debugRenderTarget: THREE.WebGLRenderTarget<THREE.Texture<unknown>>;
   debugRenderTargetbuffer: Float32Array<ArrayBuffer>;
-  velocity: THREE.Vector3;
-  acceleration: number;
-  damping: number;
-  zoomVelocity: number;
-  lastTime: number;
-  fps: number;
-  fpsDisplay: HTMLDivElement;
-  frames: any;
+
+  cameraControl: CameraControl;
+  fps: Fps;
+
   constructor() {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       premultipliedAlpha: false,
     });
 
-    // Match physical pixels (retina)
-    //  this.renderer.setPixelRatio(window.devicePixelRatio);
-
-    // Match CSS size
-    //  this.renderer.setSize(window.innerWidth, window.innerHeight, false);
-
     this.renderer.setSize(WIDTH, HEIGHT, false);
+    this.renderer.autoClear = false;
     document.body.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -68,7 +52,7 @@ class App {
       -512,
       -0.1,
       1000
-    ); //new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    );
     this.camera.zoom = 2.6;
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
@@ -88,8 +72,6 @@ class App {
 
     this.debugScene = new THREE.Scene();
 
-    this.initAtlas();
-
     this.debugRenderTarget = new THREE.WebGLRenderTarget(WIDTH, HEIGHT, {
       format: THREE.RGBAFormat,
       type: THREE.FloatType,
@@ -101,38 +83,42 @@ class App {
 
     this.debugRenderTargetbuffer = new Float32Array(WIDTH * HEIGHT * 4); // RGBA
 
-    // camera movement
-    this.velocity = new THREE.Vector3();
-    this.zoomVelocity = 0;
-    this.acceleration = 0.1;
-    this.damping = 0.9;
+    this.cameraControl = new CameraControl(this.camera);
 
-    //
-
-    const fpsDisplay = document.createElement("div");
-    fpsDisplay.style.position = "absolute";
-    fpsDisplay.style.top = "10px";
-    fpsDisplay.style.left = "10px";
-    fpsDisplay.style.color = "#00ff00";
-    fpsDisplay.style.fontFamily = "monospace";
-    fpsDisplay.style.fontSize = "20px";
-    fpsDisplay.style.backgroundColor = "rgba(0,0,0,0.5)";
-    fpsDisplay.style.padding = "5px 10px";
-    fpsDisplay.style.borderRadius = "4px";
-    this.fpsDisplay = fpsDisplay;
-    document.body.appendChild(fpsDisplay);
-
-    // Variables to measure FPS
-    this.lastTime = performance.now();
-    this.fps = 0;
-    this.frames = 0;
+    this.fps = new Fps();
   }
 
-  initAtlas() {
+  clear() {
+    if (this.scene) {
+      this.scene.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      });
+      this.scene.clear();
+    }
+
+    if (this.atlas) {
+      this.atlas.clear();
+    }
+  }
+  async initAtlas(url: string) {
+    const info = await (await fetch(url + "/info.json")).json();
+    console.warn(info);
     this.atlas = new GpuAtlas(
-      "http://localhost:3000/earth-tiles",
-      this.renderer
+      url,
+      this.renderer,
+      info.virtualSize,
+      info.maxMips
     );
+
+    await this.atlas.loadFallbackMip();
+
+    let loadPage = "vec4 loadPage(ivec2 uv ,int mip){";
+    for (let mip = 0; mip < this.atlas.MAX_MIP; mip++) {
+      loadPage += `if (mip == ${mip}) return texelFetch(pageTables[${mip}], uv,0);`;
+    }
+    loadPage += ` return texelFetch(pageTables[6], uv,0);
+    }`;
 
     // VT shader
     const svtMat = new THREE.ShaderMaterial({
@@ -140,7 +126,9 @@ class App {
       uniforms: {
         pageTables: { value: this.atlas.pageTableTex },
         atlas: { value: this.atlas.atlasTex },
-        tiles: { value: new THREE.Vector2(TILES_X, TILES_X) },
+        tiles: {
+          value: new THREE.Vector2(this.atlas.TILES_X, this.atlas.TILES_X),
+        },
         tileSize: { value: TILE_SIZE },
         atlasSize: { value: ATLAS_SIZE },
       },
@@ -153,7 +141,7 @@ class App {
       fragmentShader: `
     precision highp float;
     varying vec2 vUv; 
-    uniform sampler2D pageTables[${MAX_MIP}];
+    uniform sampler2D pageTables[${this.atlas.MAX_MIP}];
     uniform sampler2D atlas; 
     uniform vec2 tiles; 
     uniform float tileSize; 
@@ -161,16 +149,7 @@ class App {
 
     float padding = float(${PADDING});
 
-    vec4 loadPage(ivec2 uv ,int mip){
-    if (mip == 0) return texelFetch(pageTables[0], uv,0);
-    if (mip == 1) return texelFetch(pageTables[1], uv,0);
-    if (mip == 2) return texelFetch(pageTables[2], uv,0);
-    if (mip == 3) return texelFetch(pageTables[3], uv,0);
-    if (mip == 4) return texelFetch(pageTables[4], uv,0);
-    if (mip == 5) return texelFetch(pageTables[5], uv,0);
-    if (mip == 6) return texelFetch(pageTables[6], uv,0);
-    return texelFetch(pageTables[6], uv,0);
-    }
+   ${loadPage}
 
     void main(){
 
@@ -179,7 +158,9 @@ class App {
     vec2 dx = dFdx(texel);
     vec2 dy = dFdy(texel);
     float footprint = max(length(dx),length(dy));
-    float mip =clamp(floor(log2(footprint)),0.0,float(${MAX_MIP - 1}));
+    float mip =clamp(floor(log2(footprint)),0.0,float(${
+      this.atlas.MAX_MIP - 1
+    }));
 
     // fetch tile 
     float scale = exp2(float(mip));          
@@ -203,7 +184,7 @@ class App {
       
         if (entry.b < 0.5) {
         // load fallback mip 
-        mip= ${MAX_MIP-1}.0;
+        mip= ${this.atlas.MAX_MIP - 1}.0;
         scale = exp2(float(mip));          
         tileF = vUv *tiles / scale;
         tileID =ivec2(floor(tileF));
@@ -233,7 +214,9 @@ class App {
     this.fbMat = new THREE.ShaderMaterial({
       // transparent: true,
       uniforms: {
-        tiles: { value: new THREE.Vector2(TILES_X, TILES_X) },
+        tiles: {
+          value: new THREE.Vector2(this.atlas.TILES_X, this.atlas.TILES_X),
+        },
         tileSize: { value: TILE_SIZE },
         mipBias: { value: Math.ceil(Math.log2(WIDTH / 256)) },
       },
@@ -255,7 +238,9 @@ class App {
       vec2 dx = dFdx(texel);
       vec2 dy = dFdy(texel);
       float footprint = max(length(dx), length(dy));
-      float mip =clamp(floor(log2(footprint)), 0.0,float(${MAX_MIP - 1}));
+      float mip =clamp(floor(log2(footprint)), 0.0,float(${
+        this.atlas.MAX_MIP - 1
+      }));
       mip = max(mip- mipBias,0.0);
 
       float scale = exp2(mip); 
@@ -269,7 +254,6 @@ class App {
     /// atlas debug
     {
       const svtMat = new THREE.ShaderMaterial({
-        // transparent: true,
         uniforms: {
           atlas: { value: this.atlas.atlasTex },
         },
@@ -291,14 +275,13 @@ class App {
       });
       const quadGeo = new THREE.PlaneGeometry(200, 200);
       const quad = new THREE.Mesh(quadGeo, svtMat);
-      quad.position.set(-300, 400, 0);
+      quad.position.set(-400, 390, 0);
 
       this.debugScene.add(quad);
     }
     // pagetable debug
     {
       const svtMat = new THREE.ShaderMaterial({
-        // transparent: true,
         uniforms: {
           atlas: { value: this.atlas.pageTableTex },
         },
@@ -313,7 +296,7 @@ class App {
         fragmentShader: `
     precision highp float;
     varying vec2 vUv; 
-    uniform sampler2D atlas[${MAX_MIP}]; 
+    uniform sampler2D atlas[${this.atlas.MAX_MIP}]; 
     void main(){
       vec4 v = texture2D(atlas[4],vUv);
       gl_FragColor =vec4(v.r,v.g,0.0,1.0);
@@ -324,47 +307,17 @@ class App {
       const quad = new THREE.Mesh(quadGeo, svtMat);
       quad.position.set(0, 400, 0);
 
-      this.debugScene.add(quad);
+      // this.debugScene.add(quad);
     }
   }
-  ii = 0;
 
   render() {
-    // if (this.ii===30){
-    //   return
-    // }
-    // this.ii++
     requestAnimationFrame(this.render.bind(this));
 
     frameID++;
 
-    if (keys.w) this.velocity.y += this.acceleration;
-    if (keys.s) this.velocity.y -= this.acceleration;
-    if (keys.a) this.velocity.x -= this.acceleration;
-    if (keys.d) this.velocity.x += this.acceleration;
-    if (keys.q) this.zoomVelocity += this.acceleration * 0.05;
-    if (keys.z) this.zoomVelocity -= this.acceleration * 0.05;
-    // console.warn("keys",keys)
-    this.velocity.multiplyScalar(this.damping);
-    this.zoomVelocity *= this.damping;
-    // this.zoomVelocity.multiplyScalar(this.damping);
-
-    this.camera.position.add(this.velocity);
-    this.camera.zoom = Math.max(1, this.camera.zoom + this.zoomVelocity);
-    this.camera.updateProjectionMatrix();
-    this.camera.updateMatrixWorld();
-    this.renderer.autoClear = false;
-
-    // update fps
-    this.frames++;
-    const now = performance.now();
-    // Update FPS every 0.5 second
-    if (now - this.lastTime >= 500) {
-      this.fps = (this.frames * 1000) / (now - this.lastTime);
-      this.fpsDisplay.textContent = `FPS: ${this.fps.toFixed(1)}`;
-      this.frames = 0;
-      this.lastTime = now;
-    }
+    this.cameraControl.update();
+    this.fps.update();
 
     //feedback pass
 
@@ -413,22 +366,35 @@ class App {
     this.renderer.render(this.scene, this.camera);
 
     this.renderer.render(this.debugScene, this.debugCam);
-
-    // this.renderer.autoClear = true;
   }
 }
 
-const keys: { [key: string]: boolean } = {};
 const app = new App();
-await app.atlas.loadFallbackMip()
+const url = "http://localhost:3000/";
+await app.initAtlas(url + "earth-tiles-2");
 app.render();
 
-window.addEventListener("keydown", (e) => {
-  const key = e.key.toLowerCase();
-  keys[key] = true;
-});
+// switch between textures
+const select = document.createElement("select");
+select.id = "qualitySelect";
 
-window.addEventListener("keyup", (e) => {
-  const key = e.key.toLowerCase();
-  keys[key] = false;
+const options = [
+  { value: "earth-tiles-2", label: "32768 × 32768 texture" },
+  { value: "earth-tiles", label: "16384 × 16384 texture" },
+];
+
+options.forEach((opt) => {
+  const option = document.createElement("option");
+  option.value = opt.value;
+  option.textContent = opt.label;
+  select.appendChild(option);
+});
+document.body.appendChild(select);
+
+select.addEventListener("change", async (event: Event) => {
+  const target = event.target as HTMLSelectElement;
+  const value = target.value;
+  console.log("Selected:", value);
+  app.clear();
+  await app.initAtlas(url + value);
 });
