@@ -51,7 +51,7 @@ class App {
       512,
       -512,
       -0.1,
-      1000
+      1000,
     );
     this.camera.zoom = 2.6;
     this.camera.updateProjectionMatrix();
@@ -63,7 +63,7 @@ class App {
       512,
       -512,
       -0.1,
-      1000
+      1000,
     );
     // ortho.zoom = 1;
     this.debugCam.position.set(0, 1, 0);
@@ -108,7 +108,7 @@ class App {
       url,
       this.renderer,
       info.virtualSize,
-      info.maxMips
+      info.maxMips,
     );
 
     await this.atlas.loadFallbackMip();
@@ -338,7 +338,7 @@ class App {
       0,
       FEEDBACK_RES,
       FEEDBACK_RES,
-      this.atlas.readBuf
+      this.atlas.readBuf,
     );
 
     this.atlas.update(frameID);
@@ -370,7 +370,7 @@ class App {
 }
 
 const app = new App();
-const url = "http://localhost:3000/";
+const url = "/"; //"http://localhost:3000/";
 await app.initAtlas(url + "earth-tiles-2");
 app.render();
 
