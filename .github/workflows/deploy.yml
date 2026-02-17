@@ -15,8 +15,6 @@ jobs:
 
       - name: Prepare deploy folder
         run: |
-          mkdir dist
-          cp -r dist/* dist/
           cp -r public/* dist/
 
       - name: Deploy to GitHub Pages
