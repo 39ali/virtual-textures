@@ -370,7 +370,7 @@ class App {
 }
 
 const app = new App();
-const url = "/"; //"http://localhost:3000/";
+const url = "./"; //"http://localhost:3000/";
 await app.initAtlas(url + "earth-tiles-2");
 app.render();
 
